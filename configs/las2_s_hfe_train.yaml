@@ -1,0 +1,55 @@
+DATA_ROOT: /path/to/Stereo_data
+
+DATA_CONFIG:
+  DATA_INFOS:
+    - DATASET: CustomDataset
+      DATA_SPLIT:
+        TRAININGADD1: self_data/self_data_label_fsd_train.txt
+        EVALUATINGADD1: self_data/self_data_label_fsd_val.txt
+        TESTING0: testset/test227_label_fsd_opt.txt
+
+AUGMENTATION:
+  TRAIN_CROP_SIZE: [480, 640]
+  EVAL_CROP_SIZE: [480, 640]
+
+LOGGING:
+  SCALAR_INTERVAL: 10
+  IMAGE_INTERVAL: 200
+
+MODEL:
+  VERSION: las2
+  MODEL_SIZE: s
+  MAX_DISP: 192
+  PRETRAINED: none
+  HFE:
+    CUTOFF_RATIO: 0.1
+  COST_STABILIZATION:
+    ENABLED: true
+    HIDDEN_CHANNELS: 48
+    LEAKY_RELU_SLOPE: 0.1
+    RESIDUAL_SCALE_INIT: 0.0
+
+TRAIN:
+  OUTPUT_DIR: tmp/experiments/hfe_cvs_l1_clip
+  LOG_DIR: tmp/experiments/hfe_cvs_l1_clip/tensorboard
+  EPOCHS: 120
+  BATCH_SIZE: 8
+  NUM_WORKERS: 4
+  SEED: 2026
+  LR: 0.0001
+  WEIGHT_DECAY: 0.0001
+  SCHEDULER:
+    NAME: cosine
+    MIN_LR: 0.000001
+  AMP: true
+  RESUME: none
+  GRAD_CLIP: 1.0
+  LOSS:
+    LAMBDA_CVC_C0: 4.0
+    LAMBDA_CVC_C2: 48.0
+    LAMBDA_D0: 0.005
+    LAMBDA_D2: 1.0
+    LAMBDA_DISP: 1.0
+
+LOSS_ABLATION:
+  NAME: l1_disp_up_plus_aux

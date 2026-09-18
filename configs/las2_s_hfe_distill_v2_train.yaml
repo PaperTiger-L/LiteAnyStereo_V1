@@ -1,0 +1,81 @@
+DATA_ROOT: /path/to/Stereo_data
+
+DATA_CONFIG:
+  DATA_INFOS:
+    - DATASET: CustomDataset
+      DATA_SPLIT:
+        TRAININGADD1: self_data/self_data_label_fsd_train.txt
+        EVALUATINGADD1: self_data/self_data_label_fsd_val.txt
+        TESTING0: testset/test227_label_fsd_opt.txt
+
+AUGMENTATION:
+  TRAIN_CROP_SIZE: [480, 640]
+  EVAL_CROP_SIZE: [480, 640]
+
+LOGGING:
+  SCALAR_INTERVAL: 10
+  IMAGE_INTERVAL: 200
+
+MODEL:
+  VERSION: las2
+  MODEL_SIZE: s
+  MAX_DISP: 192
+  PRETRAINED: tmp/experiments/hfe_cvs_l1_clip/best.pth
+  HFE:
+    CUTOFF_RATIO: 0.1
+  COST_STABILIZATION:
+    ENABLED: true
+    HIDDEN_CHANNELS: 48
+    LEAKY_RELU_SLOPE: 0.1
+    RESIDUAL_SCALE_INIT: 0.0
+
+TRAIN:
+  OUTPUT_DIR: tmp/experiments/hfe_distill_v2
+  LOG_DIR: tmp/experiments/hfe_distill_v2/tensorboard
+  EPOCHS: 60
+  BATCH_SIZE: 8
+  NUM_WORKERS: 4
+  SEED: 2026
+  LR: 0.00005
+  WEIGHT_DECAY: 0.0001
+  SCHEDULER:
+    NAME: cosine
+    MIN_LR: 0.000001
+  AMP: true
+  RESUME: none
+  GRAD_CLIP: 1.0
+  LOSS:
+    LAMBDA_CVC_C0: 4.0
+    LAMBDA_CVC_C2: 48.0
+    LAMBDA_D0: 0.005
+    LAMBDA_D2: 1.0
+    LAMBDA_DISP: 1.0
+
+LOSS_ABLATION:
+  NAME: l1_disp_up_plus_aux
+
+DISTILLATION:
+  ARCHITECTURE_VERSION: las2_s_hfe_distill_v2
+  TEACHER:
+    ARCHITECTURE: las2_s_baseline
+    CHECKPOINT: tmp/experiments/baseline_pretrained/best.pth
+  STUDENT_PERTURBATION:
+    ENABLED: true
+    APPLY_PROB: 1.0
+    SYMMETRIC_STEREO: true
+    BRIGHTNESS: 0.2
+    CONTRAST: 0.2
+    GAMMA_MIN: 0.8
+    GAMMA_MAX: 1.2
+    GAUSSIAN_NOISE_STD: 3.0
+  LOSS:
+    LAMBDA_KD_DISP: 0.2
+    SMOOTH_L1_BETA: 1.0
+    ERROR_CLAMP: 10.0
+    USE_GT_VALID_MASK: true
+    TEACHER_GT_ERROR_MAX: 1.0
+    TEACHER_GT_REL_ERROR_MAX: 0.2
+    REL_ERROR_EPS: 1.0
+    SMALL_DISP_MAX: 10.0
+    SMALL_DISP_TEACHER_GT_ERROR_MAX: 0.5
+    GT_EDGE_MAX: 2.0

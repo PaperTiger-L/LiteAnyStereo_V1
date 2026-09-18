@@ -1,0 +1,39 @@
+DATA_ROOT: /path/to/Stereo_data
+
+DATA_CONFIG:
+  DATA_INFOS:
+    - DATASET: CustomDataset
+      DATA_SPLIT:
+        TRAININGADD1: self_data/self_data_label_fsd_train.txt
+        EVALUATINGADD1: self_data/self_data_label_fsd_val.txt
+        TESTING0: testset/test227_label_fsd_opt.txt
+
+AUGMENTATION:
+  TRAIN_CROP_SIZE: [480, 640]
+  EVAL_CROP_SIZE: [480, 640]
+
+LOGGING:
+  SCALAR_INTERVAL: 10
+  IMAGE_INTERVAL: 200
+
+MODEL:
+  VERSION: las2
+  MODEL_SIZE: s
+  MAX_DISP: 192
+  PRETRAINED: checkpoints/LAS2_S.pth
+
+TRAIN:
+  OUTPUT_DIR: tmp/experiments/baseline_pretrained
+  LOG_DIR: tmp/experiments/baseline_pretrained/tensorboard
+  EPOCHS: 60
+  BATCH_SIZE: 8
+  NUM_WORKERS: 4
+  SEED: 2026
+  LR: 0.00005
+  WEIGHT_DECAY: 0.0001
+  SCHEDULER:
+    NAME: cosine
+    MIN_LR: 0.000001
+  AMP: true
+  RESUME: none
+  GRAD_CLIP: 1.0
