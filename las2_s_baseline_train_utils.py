@@ -10,6 +10,7 @@ from las2_s_hfe_train_utils import (
     _log_stereo_images,
     _resolve_project_path,
     compute_stereo_metric_sums,
+    load_checkpoint_weights,
 )
 
 
@@ -174,10 +175,9 @@ def build_baseline_model(config, device, logger):
                 f'Checkpoint not found: {checkpoint_path}'
             )
 
-        checkpoint = torch.load(
+        checkpoint = load_checkpoint_weights(
             checkpoint_path,
             map_location='cpu',
-            weights_only=True,
         )
 
         if isinstance(checkpoint, dict) and 'model' in checkpoint:

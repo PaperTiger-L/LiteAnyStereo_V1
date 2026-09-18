@@ -15,6 +15,7 @@ from las2_s_baseline_train_utils import load_baseline_config
 from las2_s_hfe_train_utils import (
     CustomDataset,
     collate_stereo_batch,
+    load_checkpoint_weights,
 )
 
 
@@ -217,10 +218,9 @@ def extract_checkpoint_state(checkpoint):
 
 
 def load_model_checkpoint(model, checkpoint_path, model_name, device):
-    checkpoint = torch.load(
+    checkpoint = load_checkpoint_weights(
         checkpoint_path,
         map_location="cpu",
-        weights_only=True,
     )
 
     metadata = {}

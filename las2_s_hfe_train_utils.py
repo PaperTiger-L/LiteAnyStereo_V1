@@ -1,3 +1,4 @@
+import pickle
 import random
 import re
 from pathlib import Path
@@ -725,6 +726,29 @@ def _seed_data_worker(worker_id):
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 
+def load_checkpoint_weights(checkpoint_path, map_location='cpu'):
+    """Load a project checkpoint across torch releases.
+
+    Project checkpoints share storage between entries, so torch's
+    ``weights_only`` unpickler refuses them on older releases with
+    "Unsupported operand 71" (a BINPERSID opcode).  Retry without
+    ``weights_only`` for those builds; the files are written by this
+    project itself.
+    """
+    try:
+        return torch.load(
+            checkpoint_path,
+            map_location=map_location,
+            weights_only=True,
+        )
+    except pickle.UnpicklingError:
+        return torch.load(
+            checkpoint_path,
+            map_location=map_location,
+            weights_only=False,
+        )
+
+
 def build_hfe_model(config, device, logger=None):
     model_config = config['MODEL']
     hfe_config = model_config.get('HFE', {})
@@ -755,10 +779,9 @@ def build_hfe_model(config, device, logger=None):
                 f'Checkpoint not found: {checkpoint_path}'
             )
 
-        checkpoint = torch.load(
+        checkpoint = load_checkpoint_weights(
             checkpoint_path,
             map_location='cpu',
-            weights_only=True,
         )
 
         if isinstance(checkpoint, dict) and 'model' in checkpoint:
@@ -1383,10 +1406,9 @@ def load_training_checkpoint(
             f'Training checkpoint not found: {checkpoint_path}'
         )
 
-    checkpoint = torch.load(
+    checkpoint = load_checkpoint_weights(
         checkpoint_path,
         map_location=device,
-        weights_only=True,
     )
 
     if not isinstance(checkpoint, dict):

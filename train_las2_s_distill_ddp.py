@@ -44,6 +44,7 @@ from las2_s_hfe_train_utils import (
     build_optimizer_and_scaler,
     build_scheduler,
     compute_las2_s_hfe_loss,
+    load_checkpoint_weights,
     validate_epoch as hfe_validate_epoch,
 )
 from las2_s_loss_config import load_loss_ablation_config
@@ -742,10 +743,9 @@ def load_distill_training_checkpoint(
             f'Distillation checkpoint not found: {checkpoint_path}'
         )
 
-    checkpoint = torch.load(
+    checkpoint = load_checkpoint_weights(
         checkpoint_path,
         map_location=device,
-        weights_only=True,
     )
     if not isinstance(checkpoint, dict):
         raise TypeError('Distillation checkpoint must be a dictionary')
