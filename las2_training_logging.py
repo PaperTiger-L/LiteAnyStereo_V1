@@ -2,6 +2,7 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 import torch
 
@@ -10,7 +11,7 @@ import torch
 class _BatchTiming:
     should_log: bool
     data_time: float
-    step_started_at: float | None
+    step_started_at: Optional[float]
 
 
 def _format_duration(seconds):

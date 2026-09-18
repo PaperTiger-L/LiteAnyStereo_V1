@@ -66,10 +66,20 @@ def load_baseline_config(config_path):
         raise TypeError(
             'DATA_INFOS[0].DATA_SPLIT must be a dictionary'
         )
-    for split_key in ('TRAININGADD1', 'EVALUATINGADD1'):
-        if split_key not in data_split:
+    for split_prefix in ('TRAINING', 'EVALUATING'):
+        split_keys = [
+            split_key
+            for split_key in data_split
+            if split_key.startswith(split_prefix)
+        ]
+        if not split_keys:
             raise KeyError(
-                f'Missing dataset split key: {split_key}'
+                f'DATA_SPLIT must contain at least one {split_prefix} key'
+            )
+    for split_key, split_path in data_split.items():
+        if not isinstance(split_path, str) or not split_path:
+            raise ValueError(
+                f'DATA_SPLIT.{split_key} must be a non-empty string'
             )
 
     model_config = config['MODEL']

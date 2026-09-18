@@ -65,8 +65,18 @@ def load_loss_ablation_config(config_path):
     data_split = data_info.get("DATA_SPLIT")
     if not isinstance(data_split, dict):
         raise TypeError("DATA_INFOS[0].DATA_SPLIT must be a dictionary")
-    for split_name in ("TRAININGADD1", "EVALUATINGADD1"):
-        if not isinstance(data_split.get(split_name), str) or not data_split[split_name]:
+    for split_prefix in ("TRAINING", "EVALUATING"):
+        split_names = [
+            split_name
+            for split_name in data_split
+            if split_name.startswith(split_prefix)
+        ]
+        if not split_names:
+            raise KeyError(
+                f"DATA_SPLIT must contain at least one {split_prefix} key"
+            )
+    for split_name, split_path in data_split.items():
+        if not isinstance(split_path, str) or not split_path:
             raise KeyError(
                 f"DATA_SPLIT.{split_name} must be a non-empty string"
             )

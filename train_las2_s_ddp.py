@@ -51,6 +51,7 @@ from las2_s_hfe_train_utils import (
     build_optimizer_and_scaler,
     build_scheduler,
     collate_stereo_batch,
+    collect_data_split_files,
     compute_las2_s_hfe_loss,
     load_training_checkpoint,
     validate_epoch as hfe_validate_epoch,
@@ -141,7 +142,7 @@ def build_ddp_dataloaders(config, rank, world_size):
 
     train_dataset = CustomDataset(
         data_root=data_root,
-        list_file=data_split['TRAININGADD1'],
+        list_file=collect_data_split_files(data_split, 'TRAINING'),
         crop_size=augmentation_config['TRAIN_CROP_SIZE'],
         training=True,
         max_disp=max_disp,
@@ -170,7 +171,7 @@ def build_ddp_dataloaders(config, rank, world_size):
     if rank == 0:
         valid_dataset = CustomDataset(
             data_root=data_root,
-            list_file=data_split['EVALUATINGADD1'],
+            list_file=collect_data_split_files(data_split, 'EVALUATING'),
             crop_size=augmentation_config['EVAL_CROP_SIZE'],
             training=False,
             max_disp=max_disp,

@@ -27,6 +27,9 @@ tmp/experiments/
 docs/
 reports/
 
+# Local-only large-scale training configs (private dataset layout)
+configs/las2_s_hfe_20w_train.yaml
+
 # OS / editor
 .DS_Store
 .idea/

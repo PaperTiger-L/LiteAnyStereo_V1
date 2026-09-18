@@ -1,4 +1,5 @@
 import random
+import re
 from pathlib import Path
 
 import numpy as np
@@ -92,21 +93,22 @@ def load_config(config_path):
             'DATA_INFOS[0].DATA_SPLIT must be a dictionary'
         )
 
-    required_split_keys = (
-        'TRAININGADD1',
-        'EVALUATINGADD1',
-    )
+    for split_prefix in ('TRAINING', 'EVALUATING'):
+        split_keys = [
+            key
+            for key in data_split
+            if key.startswith(split_prefix)
+        ]
+        if not split_keys:
+            raise KeyError(
+                f'DATA_SPLIT must contain at least one {split_prefix} key'
+            )
 
-    missing_split_keys = [
-        key
-        for key in required_split_keys
-        if key not in data_split
-    ]
-
-    if missing_split_keys:
-        raise KeyError(
-            f'Missing dataset split keys: {missing_split_keys}'
-        )
+    for split_key, split_path in data_split.items():
+        if not isinstance(split_path, str) or not split_path:
+            raise ValueError(
+                f'DATA_SPLIT.{split_key} must be a non-empty string'
+            )
 
     augmentation_config = config['AUGMENTATION']
 
@@ -449,6 +451,33 @@ def load_config(config_path):
 
     return config
 
+
+def _split_sort_key(split_key):
+    return [
+        int(part) if part.isdigit() else part
+        for part in re.split(r'(\d+)', split_key)
+    ]
+
+
+def collect_data_split_files(data_split, split_prefix):
+    split_files = []
+    for split_key in sorted(data_split, key=_split_sort_key):
+        if not split_key.startswith(split_prefix):
+            continue
+        split_path = data_split[split_key]
+        if not isinstance(split_path, str) or not split_path:
+            raise ValueError(
+                f'DATA_SPLIT.{split_key} must be a non-empty string'
+            )
+        split_files.append(split_path)
+
+    if not split_files:
+        raise KeyError(
+            f'DATA_SPLIT must contain at least one {split_prefix} key'
+        )
+    return split_files
+
+
 class CustomDataset(Dataset):
     def __init__(self,
                  data_root,
@@ -460,10 +489,29 @@ class CustomDataset(Dataset):
         super().__init__()
 
         self.data_root = Path(data_root)
-        self.list_file = self.data_root / list_file
         self.crop_size = tuple(crop_size)
         self.training = training
         self.max_disp = max_disp
+
+        if isinstance(list_file, (list, tuple)):
+            list_files = list(list_file)
+        else:
+            list_files = [list_file]
+        if not list_files:
+            raise ValueError('list_file must contain at least one dataset list')
+
+        self.list_files = []
+        for list_path_value in list_files:
+            if not isinstance(list_path_value, (str, Path)):
+                raise TypeError(
+                    'Each dataset list path must be a string or Path, '
+                    f'got {type(list_path_value).__name__}'
+                )
+            list_path = Path(list_path_value)
+            if not list_path.is_absolute():
+                list_path = self.data_root / list_path
+            self.list_files.append(list_path)
+        self.list_file = self.list_files[0]
 
         if len(self.crop_size) != 2:
             raise ValueError(
@@ -475,40 +523,46 @@ class CustomDataset(Dataset):
                 f'crop_size must be positive, got {crop_size}'
             )
 
-        if not self.list_file.exists():
-            raise FileNotFoundError(
-                f'Dataset list not found: {self.list_file}'
-            )
-
         self.samples = []
-
-        with self.list_file.open('r') as file:
-            for line_number, line in enumerate(file, start=1):
-                fields = line.strip().split()
-
-                if not fields:
-                    continue
-
-                if len(fields) != 3:
-                    raise ValueError(
-                        f"Expected 3 fields at "
-                        f"{self.list_file}:{line_number}, "
-                        f"got {len(fields)}: {line.strip()}"
-                    )
-
-                left_path, right_path, disp_path = fields
-
-                self.samples.append(
-                    (
-                        self.data_root / left_path,
-                        self.data_root / right_path,
-                        self.data_root / disp_path,
-                    )
+        for list_path in self.list_files:
+            if not list_path.exists():
+                raise FileNotFoundError(
+                    f'Dataset list not found: {list_path}'
                 )
+
+            with list_path.open('r') as file:
+                for line_number, line in enumerate(file, start=1):
+                    fields = line.strip().split()
+
+                    if not fields:
+                        continue
+
+                    if len(fields) != 3:
+                        raise ValueError(
+                            f"Expected 3 fields at "
+                            f"{list_path}:{line_number}, "
+                            f"got {len(fields)}: {line.strip()}"
+                        )
+
+                    left_path, right_path, disp_path = fields
+
+                    self.samples.append(
+                        (
+                            self._resolve_sample_path(left_path),
+                            self._resolve_sample_path(right_path),
+                            self._resolve_sample_path(disp_path),
+                        )
+                    )
         if not self.samples:
             raise ValueError(
-                f'No valid samples found in {self.list_file}'
+                f'No valid samples found in {self.list_files}'
             )
+
+    def _resolve_sample_path(self, path_value):
+        path = Path(path_value)
+        if path.is_absolute():
+            return path
+        return self.data_root / path
 
     def __len__(self):
         return len(self.samples)
@@ -861,10 +915,17 @@ def build_optimizer_and_scaler(
         and device.type == "cuda"
     )
 
-    scaler = torch.amp.GradScaler(
-        "cuda",
-        enabled=use_amp,
-    )
+    # torch.amp.GradScaler only exists from torch 2.3; fall back to the
+    # classic API so the same script runs on older torch builds.
+    if hasattr(torch.amp, 'GradScaler'):
+        scaler = torch.amp.GradScaler(
+            "cuda",
+            enabled=use_amp,
+        )
+    else:
+        scaler = torch.cuda.amp.GradScaler(
+            enabled=use_amp,
+        )
 
     return optimizer, scaler, use_amp
 
