@@ -218,6 +218,7 @@ def train_epoch_baseline_ddp(
         total_epochs,
         text_interval,
         grad_clip=0.0,
+        scheduler=None,
 ):
     model.train()
     num_batches = len(train_loader)
@@ -274,8 +275,12 @@ def train_epoch_baseline_ddp(
                 model.parameters(),
                 grad_clip,
             )
+        scale_before_step = scaler.get_scale()
         scaler.step(optimizer)
         scaler.update()
+        optimizer_step_applied = (
+            scaler.get_scale() >= scale_before_step
+        )
 
         loss_value = loss.item()
         running_loss += loss_value
@@ -312,6 +317,12 @@ def train_epoch_baseline_ddp(
             learning_rate=optimizer.param_groups[0]['lr'],
             global_step=step,
         )
+        if (
+            scheduler is not None
+            and getattr(scheduler, 'step_per_batch', False)
+            and optimizer_step_applied
+        ):
+            scheduler.step()
 
     return _reduce_stat_sums(
         {'loss': running_loss},
@@ -341,6 +352,7 @@ def train_epoch_hfe_ddp(
         grad_clip=0.0,
         disp_band_weight=None,
         disp_near_add=None,
+        scheduler=None,
 ):
     model.train()
     num_batches = len(train_loader)
@@ -404,8 +416,12 @@ def train_epoch_hfe_ddp(
                 ],
                 grad_clip,
             )
+        scale_before_step = scaler.get_scale()
         scaler.step(optimizer)
         scaler.update()
+        optimizer_step_applied = (
+            scaler.get_scale() >= scale_before_step
+        )
 
         loss_values = {
             key: value.item()
@@ -457,6 +473,12 @@ def train_epoch_hfe_ddp(
                 'CVC2': loss_values['loss_cvc_c2'],
             },
         )
+        if (
+            scheduler is not None
+            and getattr(scheduler, 'step_per_batch', False)
+            and optimizer_step_applied
+        ):
+            scheduler.step()
 
     return _reduce_stat_sums(
         running_stats,
@@ -586,9 +608,13 @@ def run_training_ddp(args):
         raw_model,
         device_ids=[local_rank] if use_cuda else None,
         output_device=local_rank if use_cuda else None,
-        find_unused_parameters=True,
+        find_unused_parameters=False,
     )
 
+    if not np.isfinite(args.lr_scale) or args.lr_scale <= 0:
+        raise ValueError(
+            f'--lr-scale must be a finite positive number, got {args.lr_scale}'
+        )
     learning_rate = train_config['LR'] * args.lr_scale
     optimizer, scaler, use_amp = build_optimizer_and_scaler(
         config,
@@ -601,7 +627,13 @@ def run_training_ddp(args):
         if args.epochs is not None
         else train_config['EPOCHS']
     )
-    scheduler = build_scheduler(config, optimizer, epochs=total_epochs)
+    scheduler = build_scheduler(
+        config,
+        optimizer,
+        epochs=total_epochs,
+        steps_per_epoch=len(train_loader),
+        lr_scale=args.lr_scale,
+    )
     text_interval = resolve_text_interval(logging_config)
 
     if is_main:
@@ -752,6 +784,7 @@ def run_training_ddp(args):
                 'total_epochs': total_epochs,
                 'text_interval': text_interval,
                 'grad_clip': grad_clip,
+                'scheduler': scheduler,
             }
             if args.job == 'baseline':
                 train_stats = train_epoch_baseline_ddp(**common_kwargs)
@@ -822,7 +855,10 @@ def run_training_ddp(args):
                 if is_best:
                     best_val_epe = valid_stats['epe']
 
-            if scheduler is not None:
+            if (
+                scheduler is not None
+                and not getattr(scheduler, 'step_per_batch', False)
+            ):
                 scheduler.step()
 
             if is_main:

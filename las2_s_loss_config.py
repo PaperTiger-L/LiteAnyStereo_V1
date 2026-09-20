@@ -206,9 +206,9 @@ def load_loss_ablation_config(config_path):
     if not isinstance(scheduler_config, dict):
         raise TypeError("TRAIN.SCHEDULER must be a dictionary")
     scheduler_name = scheduler_config.get("NAME", "cosine")
-    if scheduler_name not in ("cosine", "none"):
+    if scheduler_name not in ("cosine", "warmup_cosine", "none"):
         raise ValueError(
-            "TRAIN.SCHEDULER.NAME must be cosine or none"
+            "TRAIN.SCHEDULER.NAME must be cosine, warmup_cosine, or none"
         )
     min_lr = scheduler_config.get("MIN_LR", 0.0)
     if (
@@ -222,6 +222,34 @@ def load_loss_ablation_config(config_path):
             "TRAIN.SCHEDULER.MIN_LR must be finite, non-negative, "
             "and no greater than TRAIN.LR"
         )
+
+    if scheduler_name == "warmup_cosine":
+        warmup_epochs = scheduler_config.get("WARMUP_EPOCHS", 1)
+        if (
+            not isinstance(warmup_epochs, int)
+            or isinstance(warmup_epochs, bool)
+            or warmup_epochs < 0
+            or warmup_epochs >= train_config["EPOCHS"]
+        ):
+            raise ValueError(
+                "TRAIN.SCHEDULER.WARMUP_EPOCHS must be a non-negative "
+                "integer smaller than TRAIN.EPOCHS"
+            )
+        warmup_start_lr = scheduler_config.get(
+            "WARMUP_START_LR",
+            1.0e-7,
+        )
+        if (
+            not isinstance(warmup_start_lr, (int, float))
+            or isinstance(warmup_start_lr, bool)
+            or not np.isfinite(warmup_start_lr)
+            or warmup_start_lr < 0
+            or warmup_start_lr > learning_rate
+        ):
+            raise ValueError(
+                "TRAIN.SCHEDULER.WARMUP_START_LR must be finite, "
+                "non-negative, and no greater than TRAIN.LR"
+            )
 
     resume_value = train_config.get("RESUME")
     if resume_value is not None and str(resume_value).lower() != "none":

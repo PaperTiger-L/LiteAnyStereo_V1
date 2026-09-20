@@ -149,7 +149,11 @@ def load_baseline_config(config_path):
     scheduler_config = train_config.get('SCHEDULER', {})
     if not isinstance(scheduler_config, dict):
         raise TypeError('TRAIN.SCHEDULER must be a dictionary')
-    if scheduler_config.get('NAME', 'cosine') not in ('cosine', 'none'):
+    if scheduler_config.get('NAME', 'cosine') not in (
+        'cosine',
+        'warmup_cosine',
+        'none',
+    ):
         raise ValueError(
             f"Unsupported scheduler: {scheduler_config.get('NAME')}"
         )

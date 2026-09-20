@@ -1,3 +1,4 @@
+import math
 import pickle
 import random
 import re
@@ -953,7 +954,66 @@ def build_optimizer_and_scaler(
     return optimizer, scaler, use_amp
 
 
-def build_scheduler(config, optimizer, epochs=None):
+class _WarmupCosineScheduler(torch.optim.lr_scheduler._LRScheduler):
+    """Learning rate scheduler with linear warmup followed by cosine decay."""
+
+    def __init__(
+            self,
+            optimizer,
+            warmup_steps,
+            total_steps,
+            steps_per_epoch,
+            warmup_start_lr,
+            eta_min,
+            last_epoch=-1,
+    ):
+        if warmup_steps < 0:
+            raise ValueError('warmup_steps must be non-negative')
+        if total_steps <= 0:
+            raise ValueError('total_steps must be positive')
+        if warmup_steps >= total_steps:
+            raise ValueError(
+                'warmup_steps must be smaller than total_steps'
+            )
+        if steps_per_epoch <= 0:
+            raise ValueError('steps_per_epoch must be positive')
+
+        self.warmup_steps = int(warmup_steps)
+        self.total_steps = int(total_steps)
+        self.steps_per_epoch = int(steps_per_epoch)
+        self.warmup_start_lr = float(warmup_start_lr)
+        self.eta_min = float(eta_min)
+        self.step_per_batch = True
+        super().__init__(optimizer, last_epoch)
+
+    def get_lr(self):
+        if self.last_epoch < self.warmup_steps:
+            alpha = float(self.last_epoch) / float(max(1, self.warmup_steps))
+            alpha = min(1.0, max(0.0, alpha))
+            return [
+                self.warmup_start_lr
+                + alpha * (base_lr - self.warmup_start_lr)
+                for base_lr in self.base_lrs
+            ]
+
+        progress = float(
+            self.last_epoch - self.warmup_steps
+        ) / float(max(1, self.total_steps - self.warmup_steps))
+        progress = min(1.0, max(0.0, progress))
+        return [
+            self.eta_min + (base_lr - self.eta_min)
+            * 0.5 * (1.0 + math.cos(math.pi * progress))
+            for base_lr in self.base_lrs
+        ]
+
+
+def build_scheduler(
+        config,
+        optimizer,
+        epochs=None,
+        steps_per_epoch=None,
+        lr_scale=1.0,
+):
     train_config = config['TRAIN']
     scheduler_config = train_config.get(
         'SCHEDULER',
@@ -964,17 +1024,193 @@ def build_scheduler(config, optimizer, epochs=None):
         'cosine',
     )
 
+    if epochs is None:
+        epochs = train_config['EPOCHS']
+    if (
+        not isinstance(epochs, int)
+        or isinstance(epochs, bool)
+        or epochs <= 0
+    ):
+        raise ValueError('epochs must be a positive integer')
+    if (
+        not isinstance(lr_scale, (int, float))
+        or isinstance(lr_scale, bool)
+        or not math.isfinite(float(lr_scale))
+        or lr_scale <= 0
+    ):
+        raise ValueError('lr_scale must be a finite positive number')
+
+    lr_scale = float(lr_scale)
+    min_lr = float(scheduler_config.get('MIN_LR', 0.0)) * lr_scale
+
     if scheduler_name == 'none':
         return None
 
-    if epochs is None:
-        epochs = train_config['EPOCHS']
+    if scheduler_name == 'cosine':
+        return torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=epochs,
+            eta_min=min_lr,
+        )
 
-    return torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        T_max=epochs,
-        eta_min=scheduler_config.get('MIN_LR', 0.0),
+    if scheduler_name == 'warmup_cosine':
+        if (
+            not isinstance(steps_per_epoch, int)
+            or isinstance(steps_per_epoch, bool)
+            or steps_per_epoch <= 0
+        ):
+            raise ValueError(
+                'steps_per_epoch must be a positive integer for '
+                'warmup_cosine'
+            )
+
+        warmup_epochs = scheduler_config.get('WARMUP_EPOCHS', 1)
+        if (
+            not isinstance(warmup_epochs, int)
+            or isinstance(warmup_epochs, bool)
+            or warmup_epochs < 0
+            or warmup_epochs >= epochs
+        ):
+            raise ValueError(
+                'WARMUP_EPOCHS must be a non-negative integer smaller '
+                'than epochs'
+            )
+
+        warmup_steps = warmup_epochs * steps_per_epoch
+        total_steps = epochs * steps_per_epoch
+        warmup_start_lr = float(
+            scheduler_config.get('WARMUP_START_LR', 1.0e-7)
+        ) * lr_scale
+
+        return _WarmupCosineScheduler(
+            optimizer,
+            warmup_steps=warmup_steps,
+            total_steps=total_steps,
+            steps_per_epoch=steps_per_epoch,
+            warmup_start_lr=warmup_start_lr,
+            eta_min=min_lr,
+        )
+
+    raise ValueError(
+        f"Unsupported scheduler NAME: {scheduler_name}"
     )
+
+def _float_sequence_matches(left, right):
+    if not isinstance(left, (list, tuple)) or not isinstance(
+        right,
+        (list, tuple),
+    ):
+        return False
+    if len(left) != len(right):
+        return False
+    return all(
+        math.isclose(
+            float(left_value),
+            float(right_value),
+            rel_tol=1.0e-12,
+            abs_tol=1.0e-12,
+        )
+        for left_value, right_value in zip(left, right)
+    )
+
+
+def _validate_scheduler_state(scheduler, scheduler_state):
+    if not isinstance(scheduler_state, dict):
+        raise TypeError('Checkpoint scheduler state must be a dictionary')
+
+    scheduler_is_per_batch = getattr(
+        scheduler,
+        'step_per_batch',
+        False,
+    )
+    checkpoint_is_per_batch = 'warmup_steps' in scheduler_state
+    if scheduler_is_per_batch != checkpoint_is_per_batch:
+        raise ValueError(
+            'Checkpoint scheduler strategy does not match the '
+            'configured scheduler; start a new run or use the '
+            'matching scheduler configuration'
+        )
+
+    if 'base_lrs' in scheduler_state and not _float_sequence_matches(
+        getattr(scheduler, 'base_lrs', None),
+        scheduler_state['base_lrs'],
+    ):
+        raise ValueError(
+            'Checkpoint scheduler base learning rates do not match the '
+            'configured optimizer; use the matching lr-scale/configuration'
+        )
+
+    if scheduler_is_per_batch:
+        integer_attributes = (
+            'warmup_steps',
+            'total_steps',
+            'steps_per_epoch',
+        )
+        float_attributes = (
+            'warmup_start_lr',
+            'eta_min',
+        )
+    else:
+        integer_attributes = ('T_max',)
+        float_attributes = ('eta_min',)
+
+    for attribute in integer_attributes:
+        expected = getattr(scheduler, attribute, None)
+        actual = scheduler_state.get(attribute)
+        if expected is not None and actual != expected:
+            raise ValueError(
+                f'Checkpoint scheduler {attribute}={actual} does not '
+                f'match configured value {expected}'
+            )
+
+    for attribute in float_attributes:
+        expected = getattr(scheduler, attribute, None)
+        actual = scheduler_state.get(attribute)
+        if expected is None or actual is None:
+            continue
+        if not math.isclose(
+            float(actual),
+            float(expected),
+            rel_tol=1.0e-12,
+            abs_tol=1.0e-12,
+        ):
+            raise ValueError(
+                f'Checkpoint scheduler {attribute}={actual} does not '
+                f'match configured value {expected}'
+            )
+
+
+def _restore_scheduler_position(scheduler, completed_steps):
+    if (
+        not isinstance(completed_steps, int)
+        or isinstance(completed_steps, bool)
+        or completed_steps < 0
+    ):
+        raise ValueError(
+            f'Invalid scheduler step count: {completed_steps}'
+        )
+
+    scheduler.last_epoch = completed_steps
+    scheduler._step_count = completed_steps + 1
+
+    if hasattr(scheduler, '_get_closed_form_lr'):
+        learning_rates = scheduler._get_closed_form_lr()
+    elif getattr(scheduler, 'step_per_batch', False):
+        learning_rates = scheduler.get_lr()
+    else:
+        scheduler.last_epoch = -1
+        scheduler._step_count = 0
+        for _ in range(completed_steps):
+            scheduler.step()
+        return
+
+    for param_group, learning_rate in zip(
+        scheduler.optimizer.param_groups,
+        learning_rates,
+    ):
+        param_group['lr'] = learning_rate
+    scheduler._last_lr = list(learning_rates)
+
 
 def _log_stereo_images(
         writer,
@@ -1472,9 +1708,27 @@ def load_training_checkpoint(
     if scheduler is not None:
         scheduler_state = checkpoint.get('scheduler')
         if scheduler_state is not None:
+            _validate_scheduler_state(scheduler, scheduler_state)
             scheduler.load_state_dict(scheduler_state)
         else:
-            scheduler.step(checkpoint.get('epoch', 0))
+            scheduler_steps = checkpoint.get('epoch', 0)
+            if not isinstance(scheduler_steps, int) or scheduler_steps < 0:
+                raise ValueError(
+                    f'Invalid checkpoint epoch for scheduler restoration: {scheduler_steps}'
+                )
+            if getattr(scheduler, 'step_per_batch', False):
+                steps_per_epoch = getattr(
+                    scheduler,
+                    'steps_per_epoch',
+                    None,
+                )
+                if not isinstance(steps_per_epoch, int) or steps_per_epoch <= 0:
+                    raise ValueError(
+                        'Cannot restore per-batch scheduler without '
+                        'steps_per_epoch'
+                    )
+                scheduler_steps *= steps_per_epoch
+            _restore_scheduler_position(scheduler, scheduler_steps)
 
     if 'scaler' not in checkpoint:
         raise KeyError(

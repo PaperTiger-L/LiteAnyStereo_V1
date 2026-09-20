@@ -39,8 +39,10 @@ TRAIN:
   LR: 0.0001
   WEIGHT_DECAY: 0.0001
   SCHEDULER:
-    NAME: cosine
+    NAME: warmup_cosine
     MIN_LR: 0.000001
+    WARMUP_EPOCHS: 1
+    WARMUP_START_LR: 0.0000001
   AMP: true
   RESUME: none
   GRAD_CLIP: 1.0

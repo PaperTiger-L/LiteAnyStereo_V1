@@ -142,6 +142,17 @@ def log_optimization_context(
         'Scheduler: %s',
         scheduler.__class__.__name__ if scheduler is not None else 'none',
     )
+    if scheduler is not None and getattr(
+        scheduler,
+        'step_per_batch',
+        False,
+    ):
+        logger.info(
+            'Scheduler steps: total=%d warmup=%d steps_per_epoch=%s',
+            scheduler.total_steps,
+            scheduler.warmup_steps,
+            scheduler.steps_per_epoch,
+        )
     logger.info('AMP enabled: %s', use_amp)
     logger.info('Text progress interval: %d batches', text_interval)
     if device.type == 'cuda':

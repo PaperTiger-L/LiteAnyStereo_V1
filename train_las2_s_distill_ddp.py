@@ -40,6 +40,8 @@ from train_las2_s_ddp import (
 from las2_s_hfe_train_utils import (
     _log_stereo_images,
     _resolve_project_path,
+    _restore_scheduler_position,
+    _validate_scheduler_state,
     build_hfe_model,
     build_optimizer_and_scaler,
     build_scheduler,
@@ -501,6 +503,7 @@ def train_epoch_distill_ddp(
         total_epochs,
         text_interval,
         grad_clip=0.0,
+        scheduler=None,
 ):
     student_model.train()
     teacher_model.eval()
@@ -597,8 +600,12 @@ def train_epoch_distill_ddp(
                 ],
                 grad_clip,
             )
+        scale_before_step = scaler.get_scale()
         scaler.step(optimizer)
         scaler.update()
+        optimizer_step_applied = (
+            scaler.get_scale() >= scale_before_step
+        )
 
         loss_values = {
             key: value.item()
@@ -679,6 +686,12 @@ def train_epoch_distill_ddp(
                 'KDr': stat_values['kd_valid_ratio'],
             },
         )
+        if (
+            scheduler is not None
+            and getattr(scheduler, 'step_per_batch', False)
+            and optimizer_step_applied
+        ):
+            scheduler.step()
 
     return _reduce_stat_sums(
         running_stats,
@@ -796,9 +809,27 @@ def load_distill_training_checkpoint(
     if scheduler is not None:
         scheduler_state = checkpoint.get('scheduler')
         if scheduler_state is not None:
+            _validate_scheduler_state(scheduler, scheduler_state)
             scheduler.load_state_dict(scheduler_state)
         else:
-            scheduler.step(checkpoint.get('epoch', 0))
+            scheduler_steps = checkpoint.get('epoch', 0)
+            if not isinstance(scheduler_steps, int) or scheduler_steps < 0:
+                raise ValueError(
+                    f'Invalid checkpoint epoch for scheduler restoration: {scheduler_steps}'
+                )
+            if getattr(scheduler, 'step_per_batch', False):
+                steps_per_epoch = getattr(
+                    scheduler,
+                    'steps_per_epoch',
+                    None,
+                )
+                if not isinstance(steps_per_epoch, int) or steps_per_epoch <= 0:
+                    raise ValueError(
+                        'Cannot restore per-batch scheduler without '
+                        'steps_per_epoch'
+                    )
+                scheduler_steps *= steps_per_epoch
+            _restore_scheduler_position(scheduler, scheduler_steps)
 
     if 'scaler' not in checkpoint:
         raise KeyError("Distillation checkpoint must contain 'scaler'")
@@ -902,6 +933,10 @@ def run_training_ddp(args):
         find_unused_parameters=True,
     )
 
+    if not np.isfinite(args.lr_scale) or args.lr_scale <= 0:
+        raise ValueError(
+            f'--lr-scale must be a finite positive number, got {args.lr_scale}'
+        )
     learning_rate = train_config['LR'] * args.lr_scale
     optimizer, scaler, use_amp = build_optimizer_and_scaler(
         config,
@@ -910,7 +945,13 @@ def run_training_ddp(args):
         learning_rate=learning_rate,
     )
     total_epochs = args.epochs if args.epochs is not None else train_config['EPOCHS']
-    scheduler = build_scheduler(config, optimizer, epochs=total_epochs)
+    scheduler = build_scheduler(
+        config,
+        optimizer,
+        epochs=total_epochs,
+        steps_per_epoch=len(train_loader),
+        lr_scale=args.lr_scale,
+    )
     text_interval = resolve_text_interval(logging_config)
 
     if is_main:
@@ -1042,6 +1083,7 @@ def run_training_ddp(args):
                 total_epochs=total_epochs,
                 text_interval=text_interval,
                 grad_clip=grad_clip,
+                scheduler=scheduler,
             )
             global_step += num_batches_per_rank
 
@@ -1089,7 +1131,7 @@ def run_training_ddp(args):
                 if is_best_sq_rel:
                     best_val_sq_rel = valid_sq_rel
 
-            if scheduler is not None:
+            if scheduler is not None and not getattr(scheduler, 'step_per_batch', False):
                 scheduler.step()
 
             if is_main:
