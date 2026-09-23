@@ -112,6 +112,32 @@ def load_loss_ablation_config(config_path):
                 f"LOGGING.{interval_key} must be a non-negative integer"
             )
 
+    text_interval = logging_config.get(
+        "TEXT_INTERVAL",
+        logging_config.get("SCALAR_INTERVAL", 0),
+    )
+    if (
+        not isinstance(text_interval, int)
+        or isinstance(text_interval, bool)
+        or text_interval < 0
+    ):
+        raise ValueError(
+            "LOGGING.TEXT_INTERVAL must be a non-negative integer"
+        )
+
+    valid_image_interval = logging_config.get(
+        "VALID_IMAGE_INTERVAL",
+        1,
+    )
+    if (
+        not isinstance(valid_image_interval, int)
+        or isinstance(valid_image_interval, bool)
+        or valid_image_interval < 0
+    ):
+        raise ValueError(
+            "LOGGING.VALID_IMAGE_INTERVAL must be a non-negative integer"
+        )
+
     valid_image_count = logging_config.get("VALID_IMAGE_COUNT", 4)
     if (
         not isinstance(valid_image_count, int)

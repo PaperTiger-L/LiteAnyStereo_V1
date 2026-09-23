@@ -54,6 +54,7 @@ from las2_s_hfe_train_utils import (
     collect_data_split_files,
     compute_las2_s_hfe_loss,
     load_training_checkpoint,
+    _tensor_stats_to_cpu_scalars,
     validate_epoch as hfe_validate_epoch,
 )
 from las2_s_loss_config import load_loss_ablation_config
@@ -441,10 +442,7 @@ def train_epoch_hfe_ddp(
             scaler.get_scale() >= scale_before_step
         )
 
-        loss_values = {
-            key: value.item()
-            for key, value in loss_stats.items()
-        }
+        loss_values = _tensor_stats_to_cpu_scalars(loss_stats)
         for key in running_stats:
             running_stats[key] += loss_values[key]
 
@@ -840,6 +838,10 @@ def run_training_ddp(args):
                             'VALID_IMAGE_COUNT',
                             4,
                         ),
+                        valid_image_interval=logging_config.get(
+                            'VALID_IMAGE_INTERVAL',
+                            1,
+                        ),
                         valid_error_max=logging_config.get(
                             'VALID_ERROR_MAX',
                             5.0,
@@ -871,6 +873,10 @@ def run_training_ddp(args):
                         valid_image_count=logging_config.get(
                             'VALID_IMAGE_COUNT',
                             4,
+                        ),
+                        valid_image_interval=logging_config.get(
+                            'VALID_IMAGE_INTERVAL',
+                            1,
                         ),
                         valid_error_max=logging_config.get(
                             'VALID_ERROR_MAX',

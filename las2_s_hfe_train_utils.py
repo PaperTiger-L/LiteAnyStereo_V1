@@ -139,6 +139,30 @@ def load_config(config_path):
                 f'{interval_key} must be a non-negative integer, '
                 f'got {interval}'
             )
+
+    text_interval = logging_config.get(
+        'TEXT_INTERVAL',
+        logging_config.get('SCALAR_INTERVAL', 0),
+    )
+    if not isinstance(text_interval, int) or text_interval < 0:
+        raise ValueError(
+            'TEXT_INTERVAL must be a non-negative integer, '
+            f'got {text_interval}'
+        )
+
+    valid_image_interval = logging_config.get(
+        'VALID_IMAGE_INTERVAL',
+        1,
+    )
+    if (
+        not isinstance(valid_image_interval, int)
+        or valid_image_interval < 0
+    ):
+        raise ValueError(
+            'VALID_IMAGE_INTERVAL must be a non-negative integer, '
+            f'got {valid_image_interval}'
+        )
+
     for crop_key in (
         "TRAIN_CROP_SIZE",
         "EVAL_CROP_SIZE",
@@ -1525,6 +1549,7 @@ def validate_epoch(
         disp_band_weight=None,
         disp_near_add=None,
         valid_image_count=4,
+        valid_image_interval=1,
         valid_error_max=5.0,
 ):
     device = torch.device(device)
@@ -1571,13 +1596,28 @@ def validate_epoch(
         'low_c2_d1_count': 0.0,
         'low_c2_valid_count': 0.0,
     }
-    # Validation images use fixed dataset indices and epoch steps.
-    fixed_indices = select_fixed_validation_indices(
-        len(valid_loader.dataset),
-        valid_image_count,
+    if (
+        not isinstance(valid_image_interval, int)
+        or isinstance(valid_image_interval, bool)
+        or valid_image_interval < 0
+    ):
+        raise ValueError(
+            'valid_image_interval must be a non-negative integer'
+        )
+
+    # Validation images use fixed dataset indices and epoch steps. A zero
+    # interval disables image writes while keeping validation metrics active.
+    write_validation_images = (
+        writer is not None
+        and valid_image_interval > 0
+        and epoch % valid_image_interval == 0
     )
-    if writer is None:
-        fixed_indices = []
+    fixed_indices = []
+    if write_validation_images:
+        fixed_indices = select_fixed_validation_indices(
+            len(valid_loader.dataset),
+            valid_image_count,
+        )
     if fixed_indices and valid_error_max <= 0:
         raise ValueError('valid_error_max must be positive')
     if logger is not None and fixed_indices:
@@ -1649,10 +1689,7 @@ def validate_epoch(
                     disp_near_add=disp_near_add,
                 )
 
-            loss_values = {
-                key: value.item()
-                for key, value in loss_stats.items()
-            }
+            loss_values = _tensor_stats_to_cpu_scalars(loss_stats)
             for key in running_stats:
                 running_stats[key] += loss_values[key]
 
@@ -1953,6 +1990,18 @@ def _resolve_project_path(path_value):
     if not path.is_absolute():
         path = Path(__file__).resolve().parent / path
     return path
+
+def _tensor_stats_to_cpu_scalars(stats):
+    """Transfer scalar tensor statistics to CPU with one synchronization."""
+    if not stats:
+        return {}
+
+    keys = tuple(stats)
+    values = torch.stack(
+        [stats[key].detach() for key in keys]
+    ).cpu().tolist()
+    return dict(zip(keys, values))
+
 
 def compute_las2_s_hfe_loss(
         model,

@@ -278,6 +278,7 @@ def validate_epoch(
         text_interval=0,
         progress_label='Validation',
         valid_image_count=4,
+        valid_image_interval=1,
         valid_error_max=5.0,
 ):
     model.eval()
@@ -292,13 +293,28 @@ def validate_epoch(
         'd1_count': 0.0,
         'valid_count': 0.0,
     }
-    # Validation images use fixed dataset indices and epoch steps.
-    fixed_indices = select_fixed_validation_indices(
-        len(valid_loader.dataset),
-        valid_image_count,
+    if (
+        not isinstance(valid_image_interval, int)
+        or isinstance(valid_image_interval, bool)
+        or valid_image_interval < 0
+    ):
+        raise ValueError(
+            'valid_image_interval must be a non-negative integer'
+        )
+
+    # Validation images use fixed dataset indices and epoch steps. A zero
+    # interval disables image writes while keeping validation metrics active.
+    write_validation_images = (
+        writer is not None
+        and valid_image_interval > 0
+        and epoch % valid_image_interval == 0
     )
-    if writer is None:
-        fixed_indices = []
+    fixed_indices = []
+    if write_validation_images:
+        fixed_indices = select_fixed_validation_indices(
+            len(valid_loader.dataset),
+            valid_image_count,
+        )
     if fixed_indices and valid_error_max <= 0:
         raise ValueError('valid_error_max must be positive')
     if logger is not None and fixed_indices:
