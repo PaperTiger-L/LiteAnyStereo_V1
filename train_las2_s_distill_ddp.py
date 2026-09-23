@@ -1110,6 +1110,14 @@ def run_training_ddp(args):
                     total_epochs=total_epochs,
                     text_interval=text_interval,
                     progress_label='Validation',
+                    valid_image_count=logging_config.get(
+                        'VALID_IMAGE_COUNT',
+                        4,
+                    ),
+                    valid_error_max=logging_config.get(
+                        'VALID_ERROR_MAX',
+                        5.0,
+                    ),
                 )
 
                 for key, value in train_stats.items():

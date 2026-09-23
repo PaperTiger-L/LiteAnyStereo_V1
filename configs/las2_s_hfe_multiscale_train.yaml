@@ -1,0 +1,125 @@
+DATA_ROOT: /data
+
+DATA_CONFIG:
+  DATA_INFOS:
+    - DATASET: CustomDataset
+      DATA_SPLIT:
+        # ================= CARLA =================
+        TRAININGADD1: /data/CARLA/town020910_label_fsd_train_opt.txt
+        # EVALUATINGADD1: /data/CARLA/town020910_label_fsd_val_opt.txt
+        # ================= LQGRASS =================
+        TRAINING2: /data/LQgrass/CentralBuilding_20250804_label_fsd_train_opt.txt
+        EVALUATING2: /data/LQgrass/CentralBuilding_20250804_label_fsd_val_opt.txt
+
+        TRAINING3: /data/LQgrass/Grass_20250814_label_fsd_train_opt.txt
+        EVALUATING3: /data/LQgrass/Grass_20250814_label_fsd_val_opt.txt
+
+        TRAINING4: /data/LQgrass/Grass_20250818_label_fsd_train_opt.txt
+        EVALUATING4: /data/LQgrass/Grass_20250818_label_fsd_val_opt.txt
+
+        # ================= OutsideGrass =================
+        TRAINING5: /data/OutsideGrass/Outside_20250822_label_fsd_train_opt.txt
+        EVALUATING5: /data/OutsideGrass/Outside_20250822_label_fsd_val_opt.txt
+
+        TRAINING6: /data/OutsideGrass/Outside_20250826_label_fsd_train_opt.txt
+        EVALUATING6: /data/OutsideGrass/Outside_20250826_label_fsd_val_opt.txt
+
+        TRAINING7: /data/OutsideGrass/Outside_20250926_label_fsd_train_opt.txt
+        EVALUATING7: /data/OutsideGrass/Outside_20250926_label_fsd_val_opt.txt
+
+        TRAININGADD2: /data/OutsideGrass/Outside_20251021_label_fsd_train_opt.txt
+        EVALUATINGADD2: /data/OutsideGrass/Outside_20251021_label_fsd_val_opt.txt
+
+        TRAININGADD3: /data/OutsideGrass/Outside_20251116_label_fsd_train_opt.txt
+        EVALUATINGADD3: /data/OutsideGrass/Outside_20251116_label_fsd_val_opt.txt
+
+        # ================= SmallGrid（all 不拆 val） =================
+        TRAININGADD4: /data/OutsideGrass/SmallGrid1211_1_label_fsd_train_opt_all.txt
+        TRAININGADD5: /data/OutsideGrass/SmallGrid1211_2_label_fsd_train_opt_all.txt
+
+        # ================= OverExposed（all 不拆 val） =================
+        TRAININGADD6: /data/OverExposed/chair20260203_label_fsd_train_opt_all.txt
+        TRAININGADD7: /data/OverExposed/fence20260125_label_fsd_train_opt_all.txt
+        TRAININGADD8: /data/OverExposed/oe20260112_label_fsd_train_opt_all.txt
+        TRAININGADD9: /data/OverExposed/oe20260122_label_fsd_train_opt_all.txt
+        TRAININGADD10: /data/OverExposed/zhanhui20260204_label_fsd_train_opt_all.txt
+        TRAININGADD11: /data/OverExposed/oeslope_label_fsd_train_opt.txt
+        TRAININGADD12: /data/OverExposed/weed_label_fsd_train_opt.txt
+
+        # ================== OutsideGrass（all 不拆 val） =================
+        TRAININGADD13: /data/OutsideGrass/20260227_rain_stone_label_fsd_train_opt_all.txt
+
+        # ================== Overseas（all 不拆 val） =================
+        TRAININGADD14: /data/Overseas/overseas_040307_label_fsd_train_opt_all.txt
+        TRAININGADD15: /data/Overseas/overseas_20260402_label_fsd_train_opt_all.txt
+
+        # ===================== OutsideGrass_new ==========================
+        TRAININGADD16: /data/OutsideGrass_new/2026_0413_aokeng_label_fsd_train_opt_all.txt
+        TRAININGADD17: /data/OutsideGrass_new/2026_0417_zaluan_label_fsd_train_opt_all.txt
+        TRAININGADD18: /data/OutsideGrass_new/2026_0413_redtrack_label_fsd_train_opt.txt
+        TRAININGADD19: /data/OutsideGrass_new/2026_0513_bluetrack_label_fsd_train_opt.txt
+        TRAININGADD20: /data/OutsideGrass_new/2026_0514_redtrack_1_label_fsd_train_opt.txt
+        TRAININGADD21: /data/OutsideGrass_new/2026_0519_redtrack_2_label_fsd_train_opt.txt
+        TRAININGADD22: /data/OutsideGrass_new/2026_0523_forest_label_fsd_train_opt.txt
+        TRAININGADD23: /data/OutsideGrass_new/2026_0524_fence_pet_label_fsd_train_opt.txt
+        TRAININGADD24: /data/OutsideGrass_new/2026_0624_suzhou_label_fsd_train_opt.txt
+        TRAININGADD25: /data/OutsideGrass_new/2026_0522_water_label_fsd_train_opt.txt
+        TRAININGADD26: /data/OutsideGrass_new/2026_0523_water_1_label_fsd_train_opt.txt
+        TRAININGADD27: /data/OutsideGrass_new/2026_0610_water_2_label_fsd_train_opt.txt
+        TRAININGADD28: /data/OutsideGrass_new/2026_0612_water_3_label_fsd_train_opt.txt
+
+        # ===================== LQ_grass ==========================
+        TRAININGADD29: /data/LQgrass/2026_0515_ceshi_label_fsd_train_opt.txt
+        EVALUATINGADD4: /data/LQgrass/2026_0515_ceshi_label_fsd_val_opt.txt
+
+        # ================= TEST =================
+        TESTING0: /data/Test/Testset_label_fsd_train_opt_all.txt
+
+AUGMENTATION:
+  TRAIN_CROP_SIZE: [480, 640]
+  EVAL_CROP_SIZE: [480, 640]
+
+LOGGING:
+  SCALAR_INTERVAL: 10
+  IMAGE_INTERVAL: 200
+  VALID_IMAGE_COUNT: 4
+  VALID_ERROR_MAX: 5.0
+
+MODEL:
+  VERSION: las2
+  MODEL_SIZE: s
+  ARCHITECTURE: las2_s_hfe_multiscale_v1
+  MAX_DISP: 192
+  PRETRAINED: tmp/experiments/hfe_20w_warmstart/best.pth
+  AGGREGATION_PRETRAINED: tmp/experiments/outside_grass_20260417_seed2026/baseline_seed2026_ddp/best.pth
+  HFE:
+    CUTOFF_RATIO: 0.1
+  COST_STABILIZATION:
+    ENABLED: false
+
+TRAIN:
+  OUTPUT_DIR: tmp/experiments/hfe_multiscale_20w
+  LOG_DIR: tmp/experiments/hfe_multiscale_20w/tensorboard
+  EPOCHS: 30
+  BATCH_SIZE: 8
+  NUM_WORKERS: 4
+  SEED: 2026
+  LR: 0.00005
+  WEIGHT_DECAY: 0.0001
+  SCHEDULER:
+    NAME: warmup_cosine
+    MIN_LR: 0.000001
+    WARMUP_EPOCHS: 1
+    WARMUP_START_LR: 0.0000001
+  AMP: true
+  RESUME: none
+  GRAD_CLIP: 1.0
+  LOSS:
+    LAMBDA_CVC_C0: 4.0
+    LAMBDA_CVC_C2: 48.0
+    LAMBDA_D0: 0.005
+    LAMBDA_D2: 1.0
+    LAMBDA_DISP: 1.0
+
+LOSS_ABLATION:
+  NAME: l1_disp_up_plus_aux

@@ -77,8 +77,26 @@ HFE_STAT_KEYS = (
 def load_ddp_config(job, config_path):
     if job == 'baseline':
         return load_baseline_config(config_path)
-    if job == 'modified_l1':
+    if job in ('modified_l1', 'optimized_multiscale'):
         config, _ = load_loss_ablation_config(config_path)
+        architecture = config['MODEL'].get(
+            'ARCHITECTURE',
+            'las2_s_hfe_cvs_v1',
+        )
+        if job == 'optimized_multiscale':
+            expected_architecture = 'las2_s_hfe_multiscale_v1'
+            if architecture != expected_architecture:
+                raise ValueError(
+                    'optimized_multiscale requires '
+                    f'MODEL.ARCHITECTURE={expected_architecture}, '
+                    f'got {architecture}'
+                )
+        elif architecture != 'las2_s_hfe_cvs_v1':
+            raise ValueError(
+                'modified_l1 requires MODEL.ARCHITECTURE='
+                'las2_s_hfe_cvs_v1, '
+                f'got {architecture}'
+            )
         return config
     raise ValueError(f'Unsupported job: {job}')
 
@@ -512,7 +530,11 @@ def save_ddp_checkpoint(
         }
     else:
         checkpoint = {
-            'architecture_version': 'las2_s_hfe_loss_ablation_v1',
+            'architecture_version': getattr(
+                raw_model,
+                'architecture_version',
+                'las2_s_hfe_loss_ablation_v1',
+            ),
             'loss_variant': loss_variant,
             'loss_weights': dict(loss_weights),
             'max_disp': getattr(raw_model, 'max_disp', None),
@@ -705,7 +727,7 @@ def run_training_ddp(args):
     loss_weights = train_config.get('LOSS')
     variant_name = (
         config['LOSS_ABLATION']['NAME']
-        if args.job == 'modified_l1'
+        if args.job in ('modified_l1', 'optimized_multiscale')
         else None
     )
 
@@ -814,6 +836,14 @@ def run_training_ddp(args):
                         total_epochs=total_epochs,
                         text_interval=text_interval,
                         progress_label='Validation',
+                        valid_image_count=logging_config.get(
+                            'VALID_IMAGE_COUNT',
+                            4,
+                        ),
+                        valid_error_max=logging_config.get(
+                            'VALID_ERROR_MAX',
+                            5.0,
+                        ),
                     )
                 else:
                     valid_stats = hfe_validate_epoch(
@@ -838,6 +868,14 @@ def run_training_ddp(args):
                         progress_label='Validation',
                         disp_band_weight=disp_band_weight,
                         disp_near_add=disp_near_add,
+                        valid_image_count=logging_config.get(
+                            'VALID_IMAGE_COUNT',
+                            4,
+                        ),
+                        valid_error_max=logging_config.get(
+                            'VALID_ERROR_MAX',
+                            5.0,
+                        ),
                     )
 
                 for key, value in train_stats.items():
@@ -955,7 +993,7 @@ def main():
     parser.add_argument(
         '--job',
         required=True,
-        choices=('baseline', 'modified_l1'),
+        choices=('baseline', 'modified_l1', 'optimized_multiscale'),
         help='Which trainer variant this DDP run reproduces',
     )
     parser.add_argument(

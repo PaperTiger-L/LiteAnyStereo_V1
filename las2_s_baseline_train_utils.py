@@ -9,6 +9,7 @@ from las2_training_logging import BatchProgressLogger
 from las2_s_hfe_train_utils import (
     _log_stereo_images,
     _resolve_project_path,
+    select_fixed_validation_indices,
     compute_stereo_metric_sums,
     load_checkpoint_weights,
 )
@@ -276,6 +277,8 @@ def validate_epoch(
         total_epochs=1,
         text_interval=0,
         progress_label='Validation',
+        valid_image_count=4,
+        valid_error_max=5.0,
 ):
     model.eval()
     num_batches = len(valid_loader)
@@ -289,6 +292,21 @@ def validate_epoch(
         'd1_count': 0.0,
         'valid_count': 0.0,
     }
+    # Validation images use fixed dataset indices and epoch steps.
+    fixed_indices = select_fixed_validation_indices(
+        len(valid_loader.dataset),
+        valid_image_count,
+    )
+    if writer is None:
+        fixed_indices = []
+    if fixed_indices and valid_error_max <= 0:
+        raise ValueError('valid_error_max must be positive')
+    if logger is not None and fixed_indices:
+        logger.info(
+            'Fixed validation image indices: %s',
+            fixed_indices,
+        )
+
     progress = BatchProgressLogger(
         logger=logger,
         phase=progress_label,
@@ -298,6 +316,7 @@ def validate_epoch(
         interval=text_interval,
         device=device,
     )
+    sample_offset = 0
 
     with torch.no_grad():
         for batch_index, batch in enumerate(valid_loader, start=1):
@@ -344,22 +363,24 @@ def validate_epoch(
             for key in metric_sums:
                 metric_sums[key] += metric_batch[key]
 
-            step = global_step + batch_index
-            if (
-                writer is not None
-                and image_interval > 0
-                and step % image_interval == 0
-            ):
-                _log_stereo_images(
-                    writer=writer,
-                    prefix='valid',
-                    left=left_batch,
-                    right=right_batch,
-                    gt_disp=gt_disp_batch,
-                    pred_disp=pred_disp,
-                    max_disp=max_disp,
-                    step=step,
-                )
+            batch_start = sample_offset
+            batch_end = batch_start + left_batch.shape[0]
+            for fixed_id, dataset_index in enumerate(fixed_indices):
+                if batch_start <= dataset_index < batch_end:
+                    _log_stereo_images(
+                        writer=writer,
+                        prefix=f'valid/fixed/{fixed_id:02d}',
+                        left=left_batch,
+                        right=right_batch,
+                        gt_disp=gt_disp_batch,
+                        pred_disp=pred_disp,
+                        valid=valid_batch,
+                        max_disp=max_disp,
+                        step=epoch,
+                        sample_index=dataset_index - batch_start,
+                        error_max=valid_error_max,
+                    )
+            sample_offset = batch_end
 
             valid_count = metric_sums['valid_count']
             running_epe = (

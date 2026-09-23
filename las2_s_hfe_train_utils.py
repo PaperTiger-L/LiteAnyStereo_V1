@@ -10,6 +10,9 @@ import torch.nn.functional as F
 import yaml
 from torch.utils.data import Dataset
 from core.liteanystereov2_hfe import LiteAnyStereoSHFE
+from core.liteanystereov2_hfe_optimized import (
+    LiteAnyStereoSHFEOptimized,
+)
 from las2_training_logging import BatchProgressLogger
 
 from core.utils import frame_utils
@@ -190,8 +193,34 @@ def load_config(config_path):
             f"MAX_DISP must be divisible by 4, got {max_disp}"
         )
 
+    architecture = model_config.get(
+        "ARCHITECTURE",
+        "las2_s_hfe_cvs_v1",
+    )
+    supported_architectures = (
+        "las2_s_hfe_cvs_v1",
+        "las2_s_hfe_multiscale_v1",
+    )
+    if architecture not in supported_architectures:
+        raise ValueError(
+            f"Unsupported HFE architecture: {architecture}. "
+            f"Expected one of {supported_architectures}"
+        )
+
+    aggregation_pretrained = model_config.get(
+        "AGGREGATION_PRETRAINED",
+    )
+    if (
+        aggregation_pretrained is not None
+        and not isinstance(aggregation_pretrained, str)
+    ):
+        raise TypeError(
+            "MODEL.AGGREGATION_PRETRAINED must be a string or null"
+        )
+
     cost_stabilization = model_config.get(
         "COST_STABILIZATION",
+        {},
     )
 
     if not isinstance(cost_stabilization, dict):
@@ -199,7 +228,13 @@ def load_config(config_path):
             "MODEL.COST_STABILIZATION must be a dictionary"
         )
 
-    if cost_stabilization.get("ENABLED") is not True:
+    if architecture == "las2_s_hfe_multiscale_v1":
+        if cost_stabilization.get("ENABLED", False) is not False:
+            raise ValueError(
+                "MODEL.COST_STABILIZATION.ENABLED must be false for "
+                "las2_s_hfe_multiscale_v1"
+            )
+    elif cost_stabilization.get("ENABLED") is not True:
         raise ValueError(
             "MODEL.COST_STABILIZATION.ENABLED must be true"
         )
@@ -750,105 +785,164 @@ def load_checkpoint_weights(checkpoint_path, map_location='cpu'):
         )
 
 
+def _extract_model_state_dict(checkpoint):
+    if isinstance(checkpoint, dict) and 'model' in checkpoint:
+        state_dict = checkpoint['model']
+    elif (
+        isinstance(checkpoint, dict)
+        and 'state_dict' in checkpoint
+    ):
+        state_dict = checkpoint['state_dict']
+    else:
+        state_dict = checkpoint
+
+    if not isinstance(state_dict, dict):
+        raise TypeError(
+            'Checkpoint must contain a state dictionary'
+        )
+
+    if state_dict and all(
+        key.startswith('module.')
+        for key in state_dict
+    ):
+        state_dict = {
+            key[len('module.'):]: value
+            for key, value in state_dict.items()
+        }
+
+    return state_dict
+
+
+def _load_compatible_model_checkpoint(
+        model,
+        checkpoint_path,
+        logger=None,
+        required_prefixes=None,
+):
+    checkpoint = load_checkpoint_weights(
+        checkpoint_path,
+        map_location='cpu',
+    )
+    state_dict = _extract_model_state_dict(checkpoint)
+
+    if required_prefixes is not None:
+        state_dict = {
+            key: value
+            for key, value in state_dict.items()
+            if any(key.startswith(prefix) for prefix in required_prefixes)
+        }
+
+    model_state = model.state_dict()
+    compatible_state_dict = {
+        key: value
+        for key, value in state_dict.items()
+        if (
+            key in model_state
+            and torch.is_tensor(value)
+            and value.shape == model_state[key].shape
+        )
+    }
+
+    if not compatible_state_dict:
+        raise RuntimeError(
+            f'No compatible checkpoint parameters matched {checkpoint_path}'
+        )
+
+    incompatible_keys = model.load_state_dict(
+        compatible_state_dict,
+        strict=False,
+    )
+
+    log = logger.info if logger is not None else print
+    log(f'Loaded checkpoint: {checkpoint_path}')
+    log(f'Matched keys: {len(compatible_state_dict)}')
+    log(f'Skipped keys: {len(state_dict) - len(compatible_state_dict)}')
+    log(f'Missing keys: {len(incompatible_keys.missing_keys)}')
+    return compatible_state_dict
+
+
 def build_hfe_model(config, device, logger=None):
     model_config = config['MODEL']
     hfe_config = model_config.get('HFE', {})
-
-    model = LiteAnyStereoSHFE(
-        fnet_pretrained=False,
-        cutoff_ratio=hfe_config.get('CUTOFF_RATIO', 0.1),
-        max_disp=model_config['MAX_DISP'],
-        cost_stabilization=model_config['COST_STABILIZATION'],
+    architecture = model_config.get(
+        'ARCHITECTURE',
+        'las2_s_hfe_cvs_v1',
     )
 
-    checkpoint_value = model_config.get('PRETRAINED')
+    if architecture == 'las2_s_hfe_multiscale_v1':
+        model = LiteAnyStereoSHFEOptimized(
+            fnet_pretrained=False,
+            cutoff_ratio=hfe_config.get('CUTOFF_RATIO', 0.1),
+            max_disp=model_config['MAX_DISP'],
+        )
+    elif architecture == 'las2_s_hfe_cvs_v1':
+        model = LiteAnyStereoSHFE(
+            fnet_pretrained=False,
+            cutoff_ratio=hfe_config.get('CUTOFF_RATIO', 0.1),
+            max_disp=model_config['MAX_DISP'],
+            cost_stabilization=model_config['COST_STABILIZATION'],
+        )
+    else:
+        raise ValueError(
+            f'Unsupported HFE architecture: {architecture}'
+        )
 
+    checkpoint_value = model_config.get('PRETRAINED')
     if (
         checkpoint_value is not None
         and str(checkpoint_value).lower() != 'none'
     ):
         checkpoint_path = Path(checkpoint_value)
-
         if not checkpoint_path.is_absolute():
             checkpoint_path = (
-                Path(__file__).resolve().parent
-                / checkpoint_path
+                Path(__file__).resolve().parent / checkpoint_path
             )
-
         if not checkpoint_path.exists():
             raise FileNotFoundError(
                 f'Checkpoint not found: {checkpoint_path}'
             )
-
-        checkpoint = load_checkpoint_weights(
-            checkpoint_path,
-            map_location='cpu',
+        _load_compatible_model_checkpoint(
+            model=model,
+            checkpoint_path=checkpoint_path,
+            logger=logger,
         )
 
-        if isinstance(checkpoint, dict) and 'model' in checkpoint:
-            state_dict = checkpoint['model']
-        elif(
-            isinstance(checkpoint, dict)
-            and 'state_dict' in checkpoint
+    if architecture == 'las2_s_hfe_multiscale_v1':
+        aggregation_checkpoint_value = model_config.get(
+            'AGGREGATION_PRETRAINED'
+        )
+        if (
+            aggregation_checkpoint_value is not None
+            and str(aggregation_checkpoint_value).lower() != 'none'
         ):
-            state_dict = checkpoint['state_dict']
-        else:
-            state_dict = checkpoint
-
-        if not isinstance(state_dict, dict):
-            raise TypeError(
-                'Checkpoint must contain a state dictionary'
+            aggregation_checkpoint_path = Path(
+                aggregation_checkpoint_value
             )
-
-        if state_dict and all(
-            key.startswith('module.')
-            for key in state_dict
-        ):
-            state_dict = {
-                key[len('module.'):]: value
-                for key, value in state_dict.items()
-            }
-
-        model_state = model.state_dict()
-        compatible_state_dict = {
-            key: value
-            for key, value in state_dict.items()
-            if (
-                key in model_state
-                and torch.is_tensor(value)
-                and value.shape == model_state[key].shape
+            if not aggregation_checkpoint_path.is_absolute():
+                aggregation_checkpoint_path = (
+                    Path(__file__).resolve().parent
+                    / aggregation_checkpoint_path
+                )
+            if not aggregation_checkpoint_path.exists():
+                raise FileNotFoundError(
+                    'Aggregation checkpoint not found: '
+                    f'{aggregation_checkpoint_path}'
+                )
+            _load_compatible_model_checkpoint(
+                model=model,
+                checkpoint_path=aggregation_checkpoint_path,
+                logger=logger,
+                required_prefixes=('cost_agg.',),
             )
-        }
-
-        if not compatible_state_dict:
-            raise RuntimeError(
-                'No compatible checkpoint parameters matched the HFE model'
+        elif logger is not None:
+            logger.warning(
+                'No AGGREGATION_PRETRAINED was provided; '
+                'cost_agg will use random initialization'
             )
-
-        incompatible_keys = model.load_state_dict(
-            compatible_state_dict,
-            strict=False,
-        )
-
-        missing_keys = incompatible_keys.missing_keys
-        skipped_keys = len(state_dict) - len(compatible_state_dict)
-
-        log = logger.info if logger is not None else print
-        log(
-            f'Loaded checkpoint: {checkpoint_path}'
-        )
-        log(
-            f'Matched keys: {len(compatible_state_dict)}'
-        )
-        log(
-            f'Skipped keys: {skipped_keys}'
-        )
-        log(
-            f'Missing keys: {len(missing_keys)}'
-        )
 
     model = model.to(device)
     return model
+
 
 def build_optimizer_and_scaler(
         config,
@@ -1212,6 +1306,32 @@ def _restore_scheduler_position(scheduler, completed_steps):
     scheduler._last_lr = list(learning_rates)
 
 
+def select_fixed_validation_indices(dataset_size, count=4):
+    if (
+        not isinstance(dataset_size, int)
+        or isinstance(dataset_size, bool)
+        or dataset_size <= 0
+    ):
+        raise ValueError('dataset_size must be a positive integer')
+    if (
+        not isinstance(count, int)
+        or isinstance(count, bool)
+        or count < 0
+    ):
+        raise ValueError('count must be a non-negative integer')
+    if count == 0:
+        return []
+
+    count = min(count, dataset_size)
+    if count == 1:
+        return [0]
+
+    return [
+        round(index * (dataset_size - 1) / (count - 1))
+        for index in range(count)
+    ]
+
+
 def _log_stereo_images(
         writer,
         prefix,
@@ -1221,43 +1341,72 @@ def _log_stereo_images(
         pred_disp,
         max_disp,
         step,
+        sample_index=0,
+        valid=None,
+        error_max=None,
 ):
     if writer is None:
         return
+    if sample_index < 0 or sample_index >= left.shape[0]:
+        raise IndexError(
+            f'sample_index {sample_index} is outside batch size {left.shape[0]}'
+        )
 
-    left_image = (
-        left[:1].detach().float().cpu() / 255.0
+    sample_slice = slice(sample_index, sample_index + 1)
+    left_image = torch.nan_to_num(
+        left[sample_slice].detach().float().cpu() / 255.0,
+        nan=0.0,
+        posinf=1.0,
+        neginf=0.0,
     ).clamp(0.0, 1.0)
-    right_image = (
-        right[:1].detach().float().cpu() / 255.0
+    right_image = torch.nan_to_num(
+        right[sample_slice].detach().float().cpu() / 255.0,
+        nan=0.0,
+        posinf=1.0,
+        neginf=0.0,
     ).clamp(0.0, 1.0)
-    gt_image = (
-        gt_disp[:1].detach().float().cpu() / max_disp
+    gt_image = torch.nan_to_num(
+        gt_disp[sample_slice].detach().float().cpu() / max_disp,
+        nan=0.0,
+        posinf=1.0,
+        neginf=0.0,
     ).clamp(0.0, 1.0)
-    pred_image = (
-        pred_disp[:1].detach().float().cpu() / max_disp
+    pred_image = torch.nan_to_num(
+        pred_disp[sample_slice].detach().float().cpu() / max_disp,
+        nan=0.0,
+        posinf=1.0,
+        neginf=0.0,
     ).clamp(0.0, 1.0)
 
-    writer.add_images(
-        f'{prefix}/left',
-        left_image,
-        step,
+    writer.add_images(f'{prefix}/left', left_image, step)
+    writer.add_images(f'{prefix}/right', right_image, step)
+    writer.add_images(f'{prefix}/gt_disp', gt_image, step)
+    writer.add_images(f'{prefix}/pred_disp', pred_image, step)
+
+    if valid is None or error_max is None:
+        return
+    if error_max <= 0:
+        raise ValueError('error_max must be positive')
+
+    valid_sample = valid[sample_slice].detach().float().cpu()
+    gt_sample = gt_disp[sample_slice].detach().float().cpu()
+    pred_sample = pred_disp[sample_slice].detach().float().cpu()
+    valid_mask = (
+        torch.isfinite(gt_sample)
+        & torch.isfinite(pred_sample)
+        & (gt_sample >= 0)
+        & (gt_sample < max_disp)
+        & (valid_sample > 0)
     )
-    writer.add_images(
-        f'{prefix}/right',
-        right_image,
-        step,
+    error_image = torch.where(
+        valid_mask,
+        (pred_sample - gt_sample).abs(),
+        torch.zeros_like(pred_sample),
     )
-    writer.add_images(
-        f'{prefix}/gt_disp',
-        gt_image,
-        step,
-    )
-    writer.add_images(
-        f'{prefix}/pred_disp',
-        pred_image,
-        step,
-    )
+    error_image = (error_image / float(error_max)).clamp(0.0, 1.0)
+    valid_image = valid_mask.float()
+    writer.add_images(f'{prefix}/abs_error', error_image, step)
+    writer.add_images(f'{prefix}/valid_mask', valid_image, step)
 
 def compute_stereo_metric_sums(
         pred_disp,
@@ -1375,6 +1524,8 @@ def validate_epoch(
         progress_label='Validation',
         disp_band_weight=None,
         disp_near_add=None,
+        valid_image_count=4,
+        valid_error_max=5.0,
 ):
     device = torch.device(device)
 
@@ -1420,6 +1571,21 @@ def validate_epoch(
         'low_c2_d1_count': 0.0,
         'low_c2_valid_count': 0.0,
     }
+    # Validation images use fixed dataset indices and epoch steps.
+    fixed_indices = select_fixed_validation_indices(
+        len(valid_loader.dataset),
+        valid_image_count,
+    )
+    if writer is None:
+        fixed_indices = []
+    if fixed_indices and valid_error_max <= 0:
+        raise ValueError('valid_error_max must be positive')
+    if logger is not None and fixed_indices:
+        logger.info(
+            'Fixed validation image indices: %s',
+            fixed_indices,
+        )
+
     progress = BatchProgressLogger(
         logger=logger,
         phase=progress_label,
@@ -1429,6 +1595,7 @@ def validate_epoch(
         interval=text_interval,
         device=device,
     )
+    sample_offset = 0
 
     with torch.no_grad():
         for batch_index, batch in enumerate(valid_loader, start=1):
@@ -1524,22 +1691,24 @@ def validate_epoch(
             metric_sums['low_c2_d1_count'] += batch_low_c2_metrics['d1_count']
             metric_sums['low_c2_valid_count'] += batch_low_c2_metrics['valid_count']
 
-            step = global_step + batch_index
-            if (
-                writer is not None
-                and image_interval > 0
-                and step % image_interval == 0
-            ):
-                _log_stereo_images(
-                    writer=writer,
-                    prefix='valid',
-                    left=left_batch,
-                    right=right_batch,
-                    gt_disp=gt_disp_batch,
-                    pred_disp=outputs['disp_up'],
-                    max_disp=max_disp,
-                    step=step,
-                )
+            batch_start = sample_offset
+            batch_end = batch_start + left_batch.shape[0]
+            for fixed_id, dataset_index in enumerate(fixed_indices):
+                if batch_start <= dataset_index < batch_end:
+                    _log_stereo_images(
+                        writer=writer,
+                        prefix=f'valid/fixed/{fixed_id:02d}',
+                        left=left_batch,
+                        right=right_batch,
+                        gt_disp=gt_disp_batch,
+                        pred_disp=outputs['disp_up'],
+                        valid=valid_batch,
+                        max_disp=max_disp,
+                        step=epoch,
+                        sample_index=dataset_index - batch_start,
+                        error_max=valid_error_max,
+                    )
+            sample_offset = batch_end
 
             valid_count = metric_sums['valid_count']
             low_c2_valid_count = metric_sums['low_c2_valid_count']
@@ -1656,6 +1825,11 @@ def load_training_checkpoint(
     supported_architectures = {
         'las2_s_hfe_litematch_cvs_v1',
         'las2_s_hfe_fair_final_disp_v1',
+        'las2_s_hfe_ablation_v1',
+        'las2_s_hfe_loss_ablation_v1',
+        'las2_s_hfe_distill_v1',
+        'las2_s_hfe_distill_v2',
+        'las2_s_hfe_multiscale_v1',
         'las2_s_baseline_las2_s_v1',
     }
     if (
@@ -1665,6 +1839,17 @@ def load_training_checkpoint(
         raise ValueError(
             f'Unsupported checkpoint architecture: '
             f'{architecture_version}'
+        )
+
+    model_architecture = getattr(model, 'architecture_version', None)
+    if (
+        model_architecture is not None
+        and architecture_version is not None
+        and architecture_version != model_architecture
+    ):
+        raise ValueError(
+            f'Checkpoint architecture {architecture_version} does not '
+            f'match model architecture {model_architecture}'
         )
 
     checkpoint_max_disp = checkpoint.get('max_disp')

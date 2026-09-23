@@ -112,6 +112,27 @@ def load_loss_ablation_config(config_path):
                 f"LOGGING.{interval_key} must be a non-negative integer"
             )
 
+    valid_image_count = logging_config.get("VALID_IMAGE_COUNT", 4)
+    if (
+        not isinstance(valid_image_count, int)
+        or isinstance(valid_image_count, bool)
+        or valid_image_count < 0
+    ):
+        raise ValueError(
+            "LOGGING.VALID_IMAGE_COUNT must be a non-negative integer"
+        )
+
+    valid_error_max = logging_config.get("VALID_ERROR_MAX", 5.0)
+    if (
+        not isinstance(valid_error_max, (int, float))
+        or isinstance(valid_error_max, bool)
+        or not np.isfinite(valid_error_max)
+        or valid_error_max <= 0
+    ):
+        raise ValueError(
+            "LOGGING.VALID_ERROR_MAX must be a finite positive number"
+        )
+
     model_config = config["MODEL"]
     if not isinstance(model_config, dict):
         raise TypeError("MODEL must be a dictionary")
@@ -119,6 +140,19 @@ def load_loss_ablation_config(config_path):
         raise ValueError("Loss ablation requires MODEL.VERSION=las2")
     if model_config.get("MODEL_SIZE") != "s":
         raise ValueError("Loss ablation requires MODEL_SIZE=s")
+    architecture = model_config.get(
+        "ARCHITECTURE",
+        "las2_s_hfe_cvs_v1",
+    )
+    supported_architectures = (
+        "las2_s_hfe_cvs_v1",
+        "las2_s_hfe_multiscale_v1",
+    )
+    if architecture not in supported_architectures:
+        raise ValueError(
+            f"Unsupported MODEL.ARCHITECTURE: {architecture}. "
+            f"Expected one of {supported_architectures}"
+        )
     max_disp = model_config.get("MAX_DISP")
     if (
         not isinstance(max_disp, int)
@@ -137,12 +171,26 @@ def load_loss_ablation_config(config_path):
         raise ValueError(
             "MODEL.PRETRAINED must be a non-empty path or none"
         )
+    aggregation_pretrained = model_config.get("AGGREGATION_PRETRAINED")
+    if aggregation_pretrained is not None and (
+        not isinstance(aggregation_pretrained, str)
+        or not aggregation_pretrained
+    ):
+        raise ValueError(
+            "MODEL.AGGREGATION_PRETRAINED must be a non-empty path or none"
+        )
     if not isinstance(model_config.get("HFE", {}), dict):
         raise TypeError("MODEL.HFE must be a dictionary")
-    cost_config = model_config.get("COST_STABILIZATION")
+    cost_config = model_config.get("COST_STABILIZATION", {})
     if not isinstance(cost_config, dict):
         raise TypeError("MODEL.COST_STABILIZATION must be a dictionary")
-    if cost_config.get("ENABLED") is not True:
+    if architecture == "las2_s_hfe_multiscale_v1":
+        if cost_config.get("ENABLED", False) is not False:
+            raise ValueError(
+                "MODEL.COST_STABILIZATION.ENABLED must be false for "
+                "las2_s_hfe_multiscale_v1"
+            )
+    elif cost_config.get("ENABLED") is not True:
         raise ValueError(
             "MODEL.COST_STABILIZATION.ENABLED must be true"
         )

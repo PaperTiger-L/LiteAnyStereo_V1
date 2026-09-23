@@ -10,6 +10,9 @@ from torch.utils.data import DataLoader
 
 from core.liteanystereov2 import LiteAnyStereoS
 from core.liteanystereov2_hfe import LiteAnyStereoSHFE
+from core.liteanystereov2_hfe_optimized import (
+    LiteAnyStereoSHFEOptimized,
+)
 from core.submodule import disparity_regression
 from las2_s_baseline_train_utils import load_baseline_config
 from las2_s_hfe_train_utils import (
@@ -35,6 +38,7 @@ A1_ARCHITECTURES = {
     "las2_s_hfe_loss_ablation_v1",
     "las2_s_hfe_distill_v1",
     "las2_s_hfe_distill_v2",
+    "las2_s_hfe_multiscale_v1",
 }
 
 
@@ -148,10 +152,31 @@ def validate_evaluation_config(config, model_name):
         hfe_config = model_config.get("HFE", {})
         if not isinstance(hfe_config, dict):
             raise TypeError("MODEL.HFE must be a dictionary")
-        cost_config = model_config.get("COST_STABILIZATION")
+
+        architecture = model_config.get(
+            "ARCHITECTURE",
+            "las2_s_hfe_cvs_v1",
+        )
+        supported_architectures = (
+            "las2_s_hfe_cvs_v1",
+            "las2_s_hfe_multiscale_v1",
+        )
+        if architecture not in supported_architectures:
+            raise ValueError(
+                f"Unsupported MODEL.ARCHITECTURE: {architecture}. "
+                f"Expected one of {supported_architectures}"
+            )
+
+        cost_config = model_config.get("COST_STABILIZATION", {})
         if not isinstance(cost_config, dict):
             raise TypeError("MODEL.COST_STABILIZATION must be a dictionary")
-        if cost_config.get("ENABLED") is not True:
+        if architecture == "las2_s_hfe_multiscale_v1":
+            if cost_config.get("ENABLED", False) is not False:
+                raise ValueError(
+                    "MODEL.COST_STABILIZATION.ENABLED must be false for "
+                    "las2_s_hfe_multiscale_v1"
+                )
+        elif cost_config.get("ENABLED") is not True:
             raise ValueError(
                 "MODEL.COST_STABILIZATION.ENABLED must be true"
             )
@@ -188,11 +213,25 @@ def build_model(config, model_name):
 
     if model_name == "a1":
         hfe_config = model_config.get("HFE", {})
-        return LiteAnyStereoSHFE(
-            fnet_pretrained=False,
-            cutoff_ratio=hfe_config.get("CUTOFF_RATIO", 0.1),
-            max_disp=max_disp,
-            cost_stabilization=model_config["COST_STABILIZATION"],
+        architecture = model_config.get(
+            "ARCHITECTURE",
+            "las2_s_hfe_cvs_v1",
+        )
+        if architecture == "las2_s_hfe_multiscale_v1":
+            return LiteAnyStereoSHFEOptimized(
+                fnet_pretrained=False,
+                cutoff_ratio=hfe_config.get("CUTOFF_RATIO", 0.1),
+                max_disp=max_disp,
+            )
+        if architecture == "las2_s_hfe_cvs_v1":
+            return LiteAnyStereoSHFE(
+                fnet_pretrained=False,
+                cutoff_ratio=hfe_config.get("CUTOFF_RATIO", 0.1),
+                max_disp=max_disp,
+                cost_stabilization=model_config["COST_STABILIZATION"],
+            )
+        raise ValueError(
+            f"Unsupported MODEL.ARCHITECTURE: {architecture}"
         )
 
     raise ValueError(f"Unsupported model name: {model_name}")
@@ -250,6 +289,17 @@ def load_model_checkpoint(model, checkpoint_path, model_name, device):
         raise ValueError(
             f"Checkpoint architecture {architecture_version!r} is not "
             f"compatible with model {model_name}"
+        )
+
+    model_architecture = getattr(model, "architecture_version", None)
+    if (
+        model_architecture is not None
+        and architecture_version is not None
+        and architecture_version != model_architecture
+    ):
+        raise ValueError(
+            f"Checkpoint architecture {architecture_version!r} does not "
+            f"match model architecture {model_architecture!r}"
         )
 
     state_dict = extract_checkpoint_state(checkpoint)
@@ -726,7 +776,10 @@ def evaluate_model(
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Evaluate original LAS2-S or HFE/CVS LAS2-S",
+        description=(
+            "Evaluate original LAS2-S or HFE LAS2-S "
+            "(CVS or multiscale aggregation)"
+        ),
     )
     parser.add_argument(
         "--config",
@@ -737,7 +790,10 @@ def parse_args():
         "--model",
         required=True,
         choices=("a0", "a1"),
-        help="a0=original LAS2-S, a1=HFE + Fusion + CVS",
+        help=(
+            "a0=original LAS2-S, a1=HFE LAS2-S; "
+            "MODEL.ARCHITECTURE selects CVS or multiscale aggregation"
+        ),
     )
     parser.add_argument(
         "--checkpoint",
