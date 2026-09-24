@@ -40,6 +40,8 @@ class LiteAnyStereoSHFEOptimized(nn.Module):
     CVS residual stages. ``cost_logits_c1`` and ``cost_logits_c2`` both expose
     the aggregated cost for compatibility with the existing CVC/D0/D2
     training interface; no second model or inference-time fusion path is used.
+    Auxiliary D0/D2 disparities remain in the 1/4-resolution coordinate system;
+    only full-resolution prediction branches convert them back to image pixels.
     """
 
     def __init__(
@@ -61,6 +63,7 @@ class LiteAnyStereoSHFEOptimized(nn.Module):
         self.cost_channels = max_disp // 4
         self.aggregation_name = "fasternet_multiscale"
         self.architecture_version = OPTIMIZED_ARCHITECTURE_VERSION
+        self.aux_disparity_scale = 4.0
 
         self.fnet = FeatureNetFasterNetHFEMultiscale(
             pretrained=fnet_pretrained,
@@ -200,8 +203,11 @@ class LiteAnyStereoSHFEOptimized(nn.Module):
             num_disparities,
         )
 
-        disp_low_c0 = disp_bins_c0 * 4.0
-        disp_low_c2 = disp_bins_c2 * 4.0
+        disp_low_c0 = disp_bins_c0
+        disp_low_c2 = disp_bins_c2
+        disp_low_c2_pixels = (
+            disp_low_c2 * self.aux_disparity_scale
+        )
 
         xspx = self.refine_1(features_left[0])
         xspx = self.refine_2(
@@ -216,7 +222,7 @@ class LiteAnyStereoSHFEOptimized(nn.Module):
         )
 
         disp_up = context_upsample(
-            disp_low_c2,
+            disp_low_c2_pixels,
             spx_pred.float(),
         )
 
@@ -224,7 +230,7 @@ class LiteAnyStereoSHFEOptimized(nn.Module):
             return disp_up
 
         disp_linear = F.interpolate(
-            disp_low_c2,
+            disp_low_c2_pixels,
             left.shape[2:],
             mode="bilinear",
             align_corners=False,

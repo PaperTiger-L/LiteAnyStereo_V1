@@ -1506,6 +1506,43 @@ def compute_stereo_metric_sums(
     }
 
 
+def get_aux_disparity_scale(model):
+    """Return the factor from auxiliary disparity units to image pixels."""
+    raw_model = getattr(model, 'module', model)
+    scale = getattr(raw_model, 'aux_disparity_scale', 1.0)
+    if (
+        not isinstance(scale, (int, float))
+        or isinstance(scale, bool)
+        or not math.isfinite(scale)
+        or scale <= 0
+    ):
+        raise ValueError(
+            f'aux_disparity_scale must be finite and positive, got {scale}'
+        )
+    return float(scale)
+
+
+def _scale_auxiliary_band_weight(band_weight, disparity_scale):
+    """Convert a full-pixel band threshold to auxiliary coordinates."""
+    if (
+        disparity_scale == 1.0
+        or band_weight is None
+        or not isinstance(band_weight, dict)
+    ):
+        return band_weight
+
+    scaled_band_weight = dict(band_weight)
+    threshold = scaled_band_weight.get('THRESHOLD')
+    if (
+        isinstance(threshold, (int, float))
+        and not isinstance(threshold, bool)
+    ):
+        scaled_band_weight['THRESHOLD'] = (
+            float(threshold) / disparity_scale
+        )
+    return scaled_band_weight
+
+
 def compute_multiscale_metric_sums(
         pred_disp,
         gt_disp,
@@ -1560,6 +1597,7 @@ def validate_epoch(
         )
 
     model.eval()
+    aux_disparity_scale = get_aux_disparity_scale(model)
 
     num_batches = len(valid_loader)
     if num_batches == 0:
@@ -1700,13 +1738,17 @@ def validate_epoch(
                 max_disp=max_disp,
             )
             batch_low_c0_metrics = compute_multiscale_metric_sums(
-                pred_disp=outputs['disp_low_c0'],
+                pred_disp=(
+                    outputs['disp_low_c0'] * aux_disparity_scale
+                ),
                 gt_disp=gt_disp_batch,
                 valid=valid_batch,
                 max_disp=max_disp,
             )
             batch_low_c2_metrics = compute_multiscale_metric_sums(
-                pred_disp=outputs['disp_low_c2'],
+                pred_disp=(
+                    outputs['disp_low_c2'] * aux_disparity_scale
+                ),
                 gt_disp=gt_disp_batch,
                 valid=valid_batch,
                 max_disp=max_disp,
@@ -2032,6 +2074,18 @@ def compute_las2_s_hfe_loss(
         return_aux=True,
     )
 
+    aux_disparity_scale = get_aux_disparity_scale(model)
+    if aux_disparity_scale == 1.0:
+        aux_gt_disp = gt_disp
+        aux_max_disp = max_disp
+    else:
+        aux_gt_disp = gt_disp / aux_disparity_scale
+        aux_max_disp = max_disp / aux_disparity_scale
+    aux_band_weight = _scale_auxiliary_band_weight(
+        disp_band_weight,
+        aux_disparity_scale,
+    )
+
     zero_loss = outputs['disp_up'].sum() * 0.0
     loss_cvc_c0 = zero_loss
     loss_cvc_c2 = zero_loss
@@ -2054,17 +2108,17 @@ def compute_las2_s_hfe_loss(
         )
         loss_d0 = intermediate_disparity_loss(
             pred_disp=outputs['disp_low_c0'],
-            gt_disp=gt_disp,
+            gt_disp=aux_gt_disp,
             valid=valid,
-            max_disp=max_disp,
-            band_weight=disp_band_weight,
+            max_disp=aux_max_disp,
+            band_weight=aux_band_weight,
         )
         loss_d2 = intermediate_disparity_loss(
             pred_disp=outputs['disp_low_c2'],
-            gt_disp=gt_disp,
+            gt_disp=aux_gt_disp,
             valid=valid,
-            max_disp=max_disp,
-            band_weight=disp_band_weight,
+            max_disp=aux_max_disp,
+            band_weight=aux_band_weight,
         )
 
     if stage in ('stage2', 'joint'):

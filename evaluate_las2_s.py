@@ -18,6 +18,7 @@ from las2_s_baseline_train_utils import load_baseline_config
 from las2_s_hfe_train_utils import (
     CustomDataset,
     collate_stereo_batch,
+    get_aux_disparity_scale,
     load_checkpoint_weights,
 )
 
@@ -591,7 +592,7 @@ def finalize_residual_stats(stats):
     }
 
 
-def collect_hfe_stage_outputs(outputs):
+def collect_hfe_stage_outputs(outputs, aux_disparity_scale):
     cost_prob_c1 = F.softmax(
         outputs["cost_logits_c1"].float(),
         dim=1,
@@ -602,9 +603,9 @@ def collect_hfe_stage_outputs(outputs):
     ) * 4.0
 
     return {
-        "c0": outputs["disp_low_c0"],
+        "c0": outputs["disp_low_c0"] * aux_disparity_scale,
         "c1": disp_low_c1,
-        "c2": outputs["disp_low_c2"],
+        "c2": outputs["disp_low_c2"] * aux_disparity_scale,
     }, {
         "c0": outputs["cost_prob_c0"],
         "c1": cost_prob_c1,
@@ -623,6 +624,7 @@ def evaluate_model(
         logger,
 ):
     model.eval()
+    aux_disparity_scale = get_aux_disparity_scale(model)
     final_metric_sums = empty_metric_sums()
     stage_metric_sums = {
         key: empty_metric_sums()
@@ -697,7 +699,10 @@ def evaluate_model(
                     )
 
                 stage_predictions, stage_probabilities = (
-                    collect_hfe_stage_outputs(outputs)
+                    collect_hfe_stage_outputs(
+                        outputs,
+                        aux_disparity_scale,
+                    )
                 )
                 for stage_name in ("c0", "c1", "c2"):
                     add_metric_sums(
